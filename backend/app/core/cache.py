@@ -1,11 +1,36 @@
-import redis
 import uuid
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 from .config import settings
+
+class MemoryCache:
+    def __init__(self):
+        self._data: Dict[str, Any] = {}
+    
+    def set(self, key: str, value: Any):
+        self._data[key] = value
+    
+    def get(self, key: str) -> Optional[Any]:
+        return self._data.get(key)
+    
+    def keys(self, pattern: str) -> list:
+        pattern = pattern.replace('*', '')
+        return [k for k in self._data.keys() if pattern in k]
+    
+    def delete(self, *keys: str):
+        for key in keys:
+            self._data.pop(key, None)
+    
+    def expire(self, key: str, seconds: int):
+        pass
 
 class CacheManager:
     def __init__(self):
-        self.client = redis.from_url(settings.redis_url, decode_responses=False)
+        try:
+            import redis
+            self.client = redis.from_url(settings.redis_url, decode_responses=False)
+            self.client.ping()
+        except Exception:
+            self.client = MemoryCache()
 
     def generate_session_id(self) -> str:
         return str(uuid.uuid4())
@@ -17,7 +42,9 @@ class CacheManager:
         data = self.client.get(f"session:{session_id}:questions")
         if data:
             import ast
-            return ast.literal_eval(data.decode('utf-8'))
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+            return ast.literal_eval(data)
         return None
 
     def set_docx_bytes(self, key: str, bytes_data: bytes):
