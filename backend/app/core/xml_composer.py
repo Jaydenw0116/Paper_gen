@@ -2,115 +2,73 @@ import re
 from io import BytesIO
 from docx import Document
 from docxcompose.composer import Composer
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-from typing import List, Dict
-import copy
+from typing import List
+
 
 class DocumentComposer:
-    QUESTION_NUMBER_REGEX = re.compile(r'^\s*\d+[\.．、]')
-    QUESTION_LABEL_REGEX = re.compile(r'^\s*第\s*\d+\s*题')
+    """
+    简化的文档合成器，模仿app.py的思路
+    """
 
     @staticmethod
     def renumber_question(doc_bytes: bytes, new_number: int) -> bytes:
-        doc = Document(BytesIO(doc_bytes))
-        number_replaced = False
-        first_paragraph_found = False
-        
-        for element in doc.element.body:
-            if element.tag.endswith('p'):
-                if not first_paragraph_found:
-                    if DocumentComposer._renumber_paragraph(element, new_number):
-                        number_replaced = True
-                    first_paragraph_found = True
-                else:
-                    DocumentComposer._clean_extra_numbers(element)
-            elif element.tag.endswith('tbl'):
-                if not first_paragraph_found:
-                    if DocumentComposer._renumber_table(element, new_number):
-                        number_replaced = True
-                    first_paragraph_found = True
-                else:
-                    DocumentComposer._clean_table_numbers(element)
-        
-        if not number_replaced:
-            first_paragraph = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph()
-            first_paragraph.text = f"{new_number}. {first_paragraph.text}"
-
-        output = BytesIO()
-        doc.save(output)
-        return output.getvalue()
-
-    @staticmethod
-    def _renumber_paragraph(paragraph_element, new_number: int):
-        # 获取段落中的所有文本元素
-        text_elements = []
-        for child in paragraph_element.iter():
-            if child.tag.endswith('t') and child.text:
-                text_elements.append(child)
-        
-        if not text_elements:
-            return False
-        
-        # 获取第一个文本元素的内容
-        first_text = text_elements[0].text
-        
-        # 检查是否匹配题号模式
-        match = DocumentComposer.QUESTION_NUMBER_REGEX.match(first_text)
-        if match:
-            # 替换整个题号部分
-            text_elements[0].text = f"{new_number}." + first_text[len(match.group()):]
-            return True
-        
-        # 尝试匹配"第X题"模式
-        match = DocumentComposer.QUESTION_LABEL_REGEX.match(first_text)
-        if match:
-            text_elements[0].text = f"{new_number}." + first_text[len(match.group()):]
-            return True
-        
-        return False
-
-    @staticmethod
-    def _clean_extra_numbers(paragraph_element):
-        # 清理段落中除了开头以外的题号
-        number_pattern = re.compile(r'(?<![\d\.])\d+[\.．、](?!\d)')
-        
-        for child in paragraph_element.iter():
-            if child.tag.endswith('t') and child.text:
-                # 替换掉所有题号模式，但保留内容
-                child.text = number_pattern.sub('', child.text)
-
-    @staticmethod
-    def _renumber_table(table_element, new_number: int):
-        for child in table_element.iter():
-            if child.tag.endswith('t') and child.text:
-                match = DocumentComposer.QUESTION_NUMBER_REGEX.match(child.text)
-                if match:
-                    child.text = f"{new_number}." + child.text[len(match.group()):]
-                    return True
-                
-                match = DocumentComposer.QUESTION_LABEL_REGEX.match(child.text)
-                if match:
-                    child.text = f"{new_number}." + child.text[len(match.group()):]
-                    return True
-        return False
-
-    @staticmethod
-    def _clean_table_numbers(table_element):
-        number_pattern = re.compile(r'(?<![\d\.])\d+[\.．、](?!\d)')
-        for child in table_element.iter():
-            if child.tag.endswith('t') and child.text:
-                child.text = number_pattern.sub('', child.text)
+        """
+        重编号问题，只替换第一个文本元素中的数字
+        """
+        try:
+            doc = Document(BytesIO(doc_bytes))
+            found = False
+            
+            for child in doc.element.body:
+                if child.tag.endswith("p") or child.tag.endswith("tbl"):
+                    
+                    def traverse_and_replace(node, inside_drawing=False):
+                        nonlocal found
+                        if found:
+                            return
+                        
+                        tag = node.tag.lower() if hasattr(node, 'tag') else ''
+                        is_drawing = (
+                            inside_drawing
+                            or 'drawing' in tag
+                            or 'shape' in tag
+                            or 'alternatecontent' in tag
+                        )
+                        
+                        if tag.endswith('t') and node.text and node.text.strip() and not is_drawing:
+                            if re.match(r"^\s*\d+[\.．、]", node.text):
+                                # 替换题号中的数字部分
+                                node.text = re.sub(r"^\s*\d+", str(new_number), node.text, count=1)
+                                found = True
+                                return
+                            found = True
+                            return
+                        
+                        if hasattr(node, '__iter__'):
+                            for c in node:
+                                traverse_and_replace(c, is_drawing)
+                    
+                    traverse_and_replace(child)
+                if found:
+                    break
+            
+            output = BytesIO()
+            doc.save(output)
+            return output.getvalue()
+        except Exception:
+            return doc_bytes
 
     @staticmethod
     def compose_documents(template_bytes: bytes, question_bytes_list: List[bytes]) -> bytes:
+        """
+        合并多个问题文档到模板文档中
+        """
         template_doc = Document(BytesIO(template_bytes))
         composer = Composer(template_doc)
 
         for q_idx, q_bytes in enumerate(question_bytes_list, start=1):
             renumbered_bytes = DocumentComposer.renumber_question(q_bytes, q_idx)
             question_doc = Document(BytesIO(renumbered_bytes))
-            
             composer.append(question_doc)
 
         output = BytesIO()
@@ -119,6 +77,7 @@ class DocumentComposer:
 
     @staticmethod
     def create_empty_template() -> bytes:
+        """创建空模板文档"""
         doc = Document()
         output = BytesIO()
         doc.save(output)
@@ -126,5 +85,6 @@ class DocumentComposer:
 
     @staticmethod
     def load_template(template_path: str) -> bytes:
+        """加载模板文档"""
         with open(template_path, 'rb') as f:
             return f.read()

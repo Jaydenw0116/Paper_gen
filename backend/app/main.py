@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from .api.routes import router
+import os
 
 app = FastAPI(
     title="智能组卷系统 API",
@@ -18,6 +20,6 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 
-@app.get("/")
-async def root():
-    return {"message": "智能组卷系统 API"}
+# 提供前端静态文件服务（使用构建后的 dist 目录）
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
+app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")

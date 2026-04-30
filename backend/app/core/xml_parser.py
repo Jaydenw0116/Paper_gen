@@ -1,324 +1,130 @@
 import re
-import uuid
-import base64
 from io import BytesIO
 from docx import Document
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement, parse_xml
-from docx.shared import Inches
-from typing import List, Dict, Any, Tuple
+from docx.oxml import OxmlElement
+from typing import List, Dict, Any
+
 
 class QuestionParser:
-    QUESTION_NUMBER_REGEX = re.compile(r'^\s*\d+[\.．、](?!\d+$)|^\s*\d+[\.．、]$')
-
-    IGNORED_CONTENT_REGEX = re.compile(
-        r'^\s*(多项选择题|选择题|填空题|判断题|问答题|解答题|计算题|证明题|评分标准|答案|参考答案|得分|姓名|班级|学号|密封线)\s*$',
-        re.IGNORECASE
-    )
-
-    TABLE_ANSWER_PATTERN = re.compile(
-        r'^\s*(答案|选项|A|B|C|D|(\d+)\s*[、.．])\s*$',
-        re.IGNORECASE
-    )
-
-    DOCUMENT_END_PATTERNS = re.compile(
-        r'\s*(小測完|小测完|考试完|考試完|測驗完|测验完)\s*$',
-        re.IGNORECASE
-    )
-
-    SECTION_HEADER_PATTERNS = re.compile(
-        r'多[项項][选選][择擇][题題]|填空[题題]|判断[题題]|问答[题題]|解答[题題]|计算[题題]|证明[题題]|附加[题題]|评分标准',
-        re.IGNORECASE
-    )
-
-    QUESTION_INDICATOR_PATTERNS = re.compile(
-        r'(下列各[題题]|下列[题題]目|每[题題]|每小题|本题|本题占|[佔]\s*[（(]?\s*分)',
-        re.IGNORECASE
-    )
-
-    ANSWER_CHOICE_PATTERN = re.compile(
-        r'^[A-D][.．、、]',
-        re.IGNORECASE
-    )
+    """
+    简化的问题解析器，模仿app.py的思路
+    """
 
     @staticmethod
     def parse_document(doc_bytes: bytes) -> List[Dict[str, Any]]:
+        """
+        解析文档，提取问题块
+        返回: [{'start': int, 'end': int, 'number': str, 'text': str}]
+        """
         doc = Document(BytesIO(doc_bytes))
+        body = doc.element.body
+        
+        # 收集所有题号位置
+        q_indices = []
+        for i, child in enumerate(body):
+            if child.tag.endswith("p") or child.tag.endswith("tbl"):
+                text = QuestionParser._get_clean_text(child)
+                # 匹配题号（排除小数如0.5中的0.）
+                if re.match(r"^\s*\d+[\.．、](?!\d)", text):
+                    q_indices.append(i)
+        
+        if not q_indices:
+            return []
+        
+        # 添加文档末尾作为最后一个结束位置
+        q_indices.append(len(body))
+        
+        # 按位置范围切分问题
         questions = []
-
-        current_question = []
-        current_number = None
-        question_start = 0
-
-        for i, element in enumerate(doc.element.body):
-            if element.tag.endswith('p'):
-                text = QuestionParser._get_element_text(element).strip()
-
-                if QuestionParser.IGNORED_CONTENT_REGEX.match(text):
-                    if current_question:
-                        questions.append({
-                            'start': question_start,
-                            'end': i,
-                            'number': current_number,
-                            'text': '\n'.join(current_question)
-                        })
-                        current_question = []
-                        current_number = None
-                    continue
-
-                # 检查段落内部是否包含多个题号（处理表格内容合并的情况）
-                parts = QuestionParser._split_text_by_question_numbers(text)
-                
-                for j, part in enumerate(parts):
-                    part_text = part['text']
-                    part_has_number = part['has_number']
-                    
-                    if part_has_number:
-                        # 这部分以题号开头
-                        if current_question:
-                            questions.append({
-                                'start': question_start,
-                                'end': i,
-                                'number': current_number,
-                                'text': '\n'.join(current_question)
-                            })
-                        current_question = [part_text]
-                        current_number = part['number']
-                        question_start = i
-                    elif current_question:
-                        current_question.append(part_text)
-                    # 如果没有题号且没有当前问题，跳过
-            elif element.tag.endswith('tbl') and current_question:
-                if not QuestionParser._is_answer_table(element):
-                    current_question.append('[TABLE]')
-            elif element.tag.endswith('tbl') and current_question:
-                if not QuestionParser._is_answer_table(element):
-                    current_question.append('[TABLE]')
-
-        if current_question:
+        for k in range(len(q_indices) - 1):
+            start_idx = q_indices[k]
+            end_idx = q_indices[k + 1]
+            
+            # 获取题号
+            start_element = body[start_idx]
+            start_text = QuestionParser._get_clean_text(start_element)
+            no_match = re.match(r"^\s*(\d+)[\.．、]", start_text)
+            original_no = no_match.group(1) + '.' if no_match else str(k + 1) + '.'
+            
             questions.append({
-                'start': question_start,
-                'end': len(doc.element.body),
-                'number': current_number,
-                'text': '\n'.join(current_question)
+                'start': start_idx,
+                'end': end_idx,
+                'number': original_no,
+                'text': start_text[:100] + '...'
             })
-
-        questions = QuestionParser._validate_questions(questions)
+        
         return questions
 
     @staticmethod
-    def _validate_questions(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        validated = []
-        for q in questions:
-            text = q.get('text', '')
-
-            if not text or len(text.strip()) < 5:
-                continue
-
-            lines = text.split('\n')
-            if not lines:
-                continue
-
-            first_line = lines[0].strip()
-            number_match = QuestionParser.QUESTION_NUMBER_REGEX.match(first_line)
-            if number_match:
-                first_line_content = first_line[len(number_match.group()):].strip()
-                if len(first_line_content) < 3 and len(lines) <= 2:
-                    # 允许只有题号的问题（如选择题答案）
-                    if len(lines) == 1 and first_line_content == '':
-                        # 单一行且只有题号，保留
-                        pass
-                    else:
-                        continue
-
-            question_text = text
-
-            lines = question_text.split('\n')
-            valid_lines = []
-            for line in lines:
-                if QuestionParser.DOCUMENT_END_PATTERNS.search(line):
-                    break
-                valid_lines.append(line)
-
-            if valid_lines:
-                question_text = '\n'.join(valid_lines)
-
-            if len(question_text.strip()) < 5:
-                continue
-
-            question_text = QuestionParser._clean_question_text(question_text)
-
-            if len(question_text.strip()) < 5:
-                continue
-
-            if 'TABLE' in question_text:
-                non_table_lines = [l for l in question_text.split('\n') if '[TABLE]' not in l]
-                text_only = ''.join(non_table_lines)
-                text_only = re.sub(r'\s+', '', text_only)
-                if len(text_only) < 5:
-                    continue
-
-            q['text'] = question_text
-            validated.append(q)
-
-        return validated
-
-    @staticmethod
-    def _clean_question_text(text: str) -> str:
-        lines = text.split('\n')
-        valid_lines = []
-        skip_mode = False
-
-        for line in lines:
-            stripped = line.strip()
-
-            if QuestionParser.SECTION_HEADER_PATTERNS.search(stripped):
-                skip_mode = True
-                continue
-
-            if skip_mode:
-                if QuestionParser.QUESTION_INDICATOR_PATTERNS.search(stripped):
-                    continue
-                if QuestionParser.ANSWER_CHOICE_PATTERN.match(stripped):
-                    skip_mode = False
-
-            if stripped:
-                valid_lines.append(line)
-
-        return '\n'.join(valid_lines)
-
-    @staticmethod
-    def _is_answer_table(element) -> bool:
-        text_content = []
-        for tbl in element.iter():
-            if tbl.tag.endswith('t') and tbl.text:
-                text_content.append(tbl.text.strip())
-
-        full_text = ' '.join(text_content)
-        if QuestionParser.TABLE_ANSWER_PATTERN.search(full_text):
-            return True
-        if len(text_content) > 0 and all(len(t) <= 5 for t in text_content):
-            return True
-        return False
-
-    @staticmethod
-    def _get_element_text(element) -> str:
+    def _get_clean_text(element) -> str:
+        """获取元素的纯文本内容，跳过图片等drawing元素"""
         text_parts = []
-        for child in element.iter():
-            if child.tag.endswith('t'):
-                text_parts.append(child.text or '')
-            elif child.tag.endswith('tab'):
+        
+        def traverse(node, inside_drawing=False):
+            tag = node.tag.lower() if hasattr(node, 'tag') else ''
+            is_drawing = (
+                inside_drawing
+                or 'drawing' in tag
+                or 'shape' in tag
+                or 'alternatecontent' in tag
+            )
+            
+            if tag.endswith('t') and node.text and not is_drawing:
+                text_parts.append(node.text)
+            elif tag.endswith('tab') and not is_drawing:
                 text_parts.append(' ')
-            elif child.tag.endswith('br'):
-                text_parts.append('\n')
-        return ''.join(text_parts)
-
-    @staticmethod
-    def _split_text_by_question_numbers(text: str) -> list:
-        """
-        将文本按题号分割，处理段落内部包含多个题号的情况
-        返回格式: [{'text': 'xxx', 'has_number': True/False, 'number': '1.'}]
-        """
-        if not text:
-            return [{'text': '', 'has_number': False, 'number': ''}]
-        
-        parts = []
-        
-        # 查找文本中所有题号位置
-        number_pattern = re.compile(r'(?<!\d)\d+[\.．、](?!\d)')
-        matches = list(number_pattern.finditer(text))
-        
-        if not matches:
-            # 没有找到任何题号
-            return [{'text': text, 'has_number': False, 'number': ''}]
-        
-        # 如果第一个题号不在开头，先添加开头的内容
-        if matches[0].start() > 0:
-            parts.append({'text': text[:matches[0].start()].strip(), 'has_number': False, 'number': ''})
-        
-        # 处理每个题号
-        for i, match in enumerate(matches):
-            # 获取当前题号
-            current_number = match.group().strip()
             
-            # 确定下一个题号的位置
-            if i < len(matches) - 1:
-                next_match = matches[i + 1]
-                end_pos = next_match.start()
-            else:
-                end_pos = len(text)
-            
-            # 获取从当前题号到下一个题号之间的内容
-            content = text[match.start():end_pos].strip()
-            parts.append({'text': content, 'has_number': True, 'number': current_number})
+            if hasattr(node, '__iter__'):
+                for child in node:
+                    traverse(child, is_drawing)
         
-        # 清理空的部分
-        return [p for p in parts if p['text'].strip()]
-
+        traverse(element)
+        return ''.join(text_parts).strip()
 
     @staticmethod
     def extract_question_block(doc_bytes: bytes, start_idx: int, end_idx: int, question_number: str = None) -> bytes:
-        doc = Document(BytesIO(doc_bytes))
-        body_len = len(doc.element.body)
-
-        end_idx = min(end_idx + 1, body_len)
-        start_idx = max(start_idx, 0)
-
-        nodes_to_remove = []
-
-        for i in range(body_len - 1, end_idx - 1, -1):
-            if i >= 0 and i < len(doc.element.body):
-                if not doc.element.body[i].tag.endswith('sectPr'):
-                    nodes_to_remove.append(doc.element.body[i])
-
-        for i in range(start_idx - 1, -1, -1):
-            if i >= 0 and i < len(doc.element.body):
-                if not doc.element.body[i].tag.endswith('sectPr'):
-                    nodes_to_remove.append(doc.element.body[i])
-
-        for node in nodes_to_remove:
-            try:
-                if node in doc.element.body:
-                    doc.element.body.remove(node)
-            except Exception:
-                pass
-
-        if len(doc.element.body) > 0:
-            last_child = doc.element.body[-1]
-            if last_child is not None and not last_child.tag.endswith('sectPr'):
-                new_p = OxmlElement('w:p')
-                doc.element.body.insert(len(doc.element.body) - 1, new_p)
+        """
+        提取指定范围的问题块，保留格式和图片
+        """
+        new_doc = Document(BytesIO(doc_bytes))
+        new_body = new_doc.element.body
+        
+        # 删除不在范围内的元素
+        for i in range(len(new_body) - 1, -1, -1):
+            child = new_body[i]
+            # 保留sectPr（节属性）
+            if child.tag.endswith("sectPr"):
+                continue
+            # 删除范围外的元素
+            if i < start_idx or i >= end_idx:
+                child.getparent().remove(child)
+        
+        # 在末尾添加一个空段落（避免文档损坏）
+        para = new_doc.add_paragraph()
+        p_elem = para._p
+        sect_prs = new_body.xpath("./w:sectPr")
+        if sect_prs:
+            sect_prs[-1].addprevious(p_elem)
 
         output = BytesIO()
-        doc.save(output)
+        new_doc.save(output)
         return output.getvalue()
-
 
     @staticmethod
     def extract_preview_text(doc_bytes: bytes) -> str:
+        """提取文档的预览文本"""
         doc = Document(BytesIO(doc_bytes))
-        text = []
-
-        for element in doc.element.body:
-            if element.tag.endswith('p'):
-                text.append(QuestionParser._get_element_text(element))
-            elif element.tag.endswith('tbl'):
-                text.append('[TABLE]')
-
-        full_text = '\n'.join(text)
-        full_text = re.sub(r'\b\d{9,}\b', '', full_text)
-        return full_text.strip()[:500]
+        text_parts = []
+        for para in doc.paragraphs[:3]:
+            text_parts.append(para.text)
+        return ' '.join(text_parts).strip()[:200]
 
     @staticmethod
     def extract_images(doc_bytes: bytes) -> List[str]:
-        images = []
+        """提取文档中的图片信息"""
         doc = Document(BytesIO(doc_bytes))
-
+        images = []
         for rel in doc.part.rels.values():
-            if 'image' in rel.target_ref:
-                image_data = rel.target_part.blob
-                if image_data:
-                    base64_img = base64.b64encode(image_data).decode('utf-8')
-                    images.append(base64_img)
-
+            if "image" in rel.target_ref:
+                images.append(rel.target_ref)
         return images
