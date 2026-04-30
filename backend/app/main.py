@@ -5,7 +5,7 @@ from .api.routes import router
 import os
 
 app = FastAPI(
-    title="智能组卷系统 API",
+    title="坚哥小测组卷系统v1.0 API",
     description="基于Word底层XML的智能组卷系统后端API",
     version="1.0.0"
 )

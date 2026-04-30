@@ -7,7 +7,7 @@
             <FileText class="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 class="text-xl font-bold text-gray-800">智能组卷系统</h1>
+            <h1 class="text-xl font-bold text-gray-800">坚哥小测组卷系统v1.0</h1>
             <p class="text-sm text-gray-500">基于Word底层XML的精准切割与缝合技术</p>
           </div>
         </div>
