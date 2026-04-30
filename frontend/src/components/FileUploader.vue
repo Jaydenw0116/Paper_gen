@@ -135,7 +135,12 @@ const handleUpload = async () => {
     const response = await uploadDocuments(questionFile.value, answerFile.value)
     emit('upload-success', response.data)
   } catch (err) {
-    error.value = err.response?.data?.detail || '上传失败，请重试'
+    console.error('Upload error:', err)
+    const errorMsg = err.response?.data?.detail || 
+                    err.response?.data?.error ||
+                    err.message ||
+                    '上传失败，请重试'
+    error.value = errorMsg
   } finally {
     loading.value = false
   }

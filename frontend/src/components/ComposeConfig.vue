@@ -8,32 +8,11 @@
     <div class="space-y-4">
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">试卷标题</label>
-        <input 
+        <input
           v-model="config.title"
-          type="text" 
+          type="text"
           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
           placeholder="请输入试卷标题"
-        />
-      </div>
-
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">科目</label>
-        <input 
-          v-model="config.subject"
-          type="text" 
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-          placeholder="请输入科目名称"
-        />
-      </div>
-
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">总分</label>
-        <input 
-          v-model.number="config.totalScore"
-          type="number" 
-          min="1"
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-          placeholder="请输入总分"
         />
       </div>
 
@@ -82,9 +61,7 @@ const props = defineProps({
 const emit = defineEmits(['compose-success'])
 
 const config = reactive({
-  title: '试卷',
-  subject: '',
-  totalScore: 100
+  title: '试卷'
 })
 
 const loading = ref(false)
@@ -94,17 +71,15 @@ const selectedCount = () => props.selectedIds.length
 
 const handleCompose = async () => {
   if (selectedCount() === 0) return
-  
+
   loading.value = true
   error.value = ''
-  
+
   try {
     await composeDocuments(
       props.sessionId,
       props.selectedIds,
-      config.title,
-      config.subject,
-      config.totalScore
+      config.title
     )
     emit('compose-success')
   } catch (err) {
