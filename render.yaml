@@ -1,0 +1,13 @@
+# Render Blueprint 配置
+# 用于一键部署后端服务
+
+services:
+  - type: web
+    name: paper-gen-backend
+    env: python
+    plan: free
+    region: singapore  # 可以改: oregon, frankfurt, singapore, tokyo
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    rootDir: backend
+    autoDeploy: true
